@@ -1,0 +1,160 @@
+package com.localadb.manager.adb
+
+/** Уровень риска отключения пакета. */
+enum class OptimizationRisk {
+    LOW,    // Безопасно — телеметрия, реклама, необязательные сервисы
+    MEDIUM, // Умеренный — может затронуть некоторые функции прошивки
+}
+
+/** Один пакет, который можно безопасно отключить для ускорения устройства. */
+data class OptimizableApp(
+    val displayName: String,
+    val packageName: String,
+    val description: String,
+    val risk: OptimizationRisk,
+)
+
+/** Профиль одного производителя с его списком пакетов. */
+data class ManufacturerProfile(
+    val name: String,
+    val emoji: String,
+    val apps: List<OptimizableApp>,
+)
+
+/** Полная база данных оптимизируемых пакетов по производителям. */
+val OPTIMIZATION_DATABASE: List<ManufacturerProfile> = listOf(
+
+    ManufacturerProfile(
+        name = "Xiaomi / Redmi / POCO",
+        emoji = "📱",
+        apps = listOf(
+            OptimizableApp("MIUI Analytics", "com.miui.analytics",
+                "Сбор и отправка аналитики использования устройства в Xiaomi", OptimizationRisk.LOW),
+            OptimizableApp("MSA (реклама)", "com.miui.msa.global",
+                "Рекламный движок MIUI — показывает рекламу в системных приложениях", OptimizationRisk.LOW),
+            OptimizableApp("GetApps", "com.xiaomi.market",
+                "Магазин приложений Xiaomi — замена Google Play", OptimizationRisk.LOW),
+            OptimizableApp("App Vault", "com.miui.personalassistant",
+                "Лента рекомендаций и ярлыков на левом рабочем столе", OptimizationRisk.LOW),
+            OptimizableApp("Joyose", "com.xiaomi.joyose",
+                "Рекламный сервис для игр от Xiaomi", OptimizationRisk.LOW),
+            OptimizableApp("Mi Browser", "com.mi.globalbrowser",
+                "Встроенный браузер Xiaomi с трекингом", OptimizationRisk.LOW),
+            OptimizableApp("Mi Video", "com.miui.video",
+                "Видеоплеер Xiaomi с рекламой", OptimizationRisk.LOW),
+            OptimizableApp("Mi Music", "com.miui.player",
+                "Музыкальный плеер Xiaomi", OptimizationRisk.LOW),
+            OptimizableApp("Mi Credit", "com.xiaomi.finance",
+                "Финансовые услуги Xiaomi (кредиты, страховки)", OptimizationRisk.LOW),
+            OptimizableApp("Yellow Pages", "com.miui.yellowpage",
+                "Определитель номеров и телефонный справочник Xiaomi", OptimizationRisk.LOW),
+            OptimizableApp("Feedback / BugReport", "com.miui.bugreport",
+                "Отправка отчётов об ошибках и обратной связи в Xiaomi", OptimizationRisk.LOW),
+            OptimizableApp("Mi Share", "com.miui.mishare.connectivity",
+                "Беспроводная передача файлов между устройствами Xiaomi", OptimizationRisk.LOW),
+            OptimizableApp("Wallpaper Carousel", "com.miui.miwallpaper",
+                "Автоматическая смена обоев рабочего стола", OptimizationRisk.LOW),
+            OptimizableApp("Security Analytics", "com.miui.securitycenter.remote",
+                "Отправка данных об использовании приложения «Безопасность»", OptimizationRisk.LOW),
+            OptimizableApp("MIUI Daemon", "com.miui.daemon",
+                "Фоновый демон сбора диагностических данных", OptimizationRisk.MEDIUM),
+            OptimizableApp("Mipush (push-уведомления)", "com.xiaomi.mipush.sdk",
+                "Push-уведомления от сервисов Xiaomi — отключение может затронуть уведомления Mi-приложений", OptimizationRisk.MEDIUM),
+        ),
+    ),
+
+    ManufacturerProfile(
+        name = "Samsung",
+        emoji = "🌀",
+        apps = listOf(
+            OptimizableApp("Galaxy Store", "com.sec.android.app.samsungapps",
+                "Магазин приложений Samsung — альтернатива Google Play", OptimizationRisk.LOW),
+            OptimizableApp("Game Launcher", "com.samsung.android.game.gamehome",
+                "Игровой центр с дополнительными функциями для геймеров", OptimizationRisk.LOW),
+            OptimizableApp("AR Zone", "com.samsung.android.arzone",
+                "AR-функции: AR Emoji, зарисовки дополненной реальности", OptimizationRisk.LOW),
+            OptimizableApp("Samsung Free", "com.samsung.android.app.spage",
+                "Новостная лента Samsung (левый экран рабочего стола)", OptimizationRisk.LOW),
+            OptimizableApp("Samsung Global Goals", "com.samsung.android.globalgoals",
+                "Благотворительное приложение Samsung — показывает рекламу между разблокировками", OptimizationRisk.LOW),
+            OptimizableApp("Smart Tutor", "com.rsupport.rs.activity.samsung",
+                "Удалённая поддержка Samsung — позволяет сотрудникам Samsung управлять устройством", OptimizationRisk.LOW),
+            OptimizableApp("Bixby Routines", "com.samsung.android.app.routines",
+                "Автоматические сценарии Bixby на основе расписания и местоположения", OptimizationRisk.LOW),
+            OptimizableApp("Bixby Voice", "com.samsung.android.bixby.agent",
+                "Голосовой ассистент Bixby", OptimizationRisk.LOW),
+            OptimizableApp("Samsung Push Service", "com.sec.spp.push",
+                "Push-уведомления от сервисов Samsung — можно отключить, если не пользуетесь Samsung Account", OptimizationRisk.MEDIUM),
+            OptimizableApp("Samsung Members", "com.samsung.android.voc",
+                "Обратная связь и поддержка Samsung", OptimizationRisk.LOW),
+            OptimizableApp("Samsung Tips", "com.samsung.android.app.tips",
+                "Советы по использованию устройства Samsung", OptimizationRisk.LOW),
+            OptimizableApp("Samsung Checkout", "com.sec.android.app.billing",
+                "Система оплаты внутри Galaxy Store", OptimizationRisk.LOW),
+            OptimizableApp("Samsung Visit In", "com.samsung.android.widgetapp.webmanual",
+                "Интерактивное руководство пользователя Samsung", OptimizationRisk.LOW),
+            OptimizableApp("Game Booster", "com.samsung.android.game.gametools",
+                "Оверлей с игровыми инструментами поверх игр", OptimizationRisk.LOW),
+        ),
+    ),
+
+    ManufacturerProfile(
+        name = "vivo / iQOO",
+        emoji = "📲",
+        apps = listOf(
+            OptimizableApp("vivo Browser", "com.vivo.browser",
+                "Встроенный браузер vivo", OptimizationRisk.LOW),
+            OptimizableApp("Jovi (ассистент)", "com.vivo.jovi",
+                "AI-ассистент и умный экран vivo", OptimizationRisk.MEDIUM),
+            OptimizableApp("V-Appstore", "com.bbk.appstore",
+                "Магазин приложений vivo", OptimizationRisk.LOW),
+            OptimizableApp("vivo Feedback", "com.vivo.feedback",
+                "Отправка отзывов и отчётов об ошибках в vivo", OptimizationRisk.LOW),
+            OptimizableApp("User Experience Program", "com.vivo.abe",
+                "Программа сбора данных об использовании для улучшения продуктов vivo", OptimizationRisk.LOW),
+            OptimizableApp("Hot Apps / Hot Games", "com.vivo.game",
+                "Рекомендации популярных игр и приложений от vivo", OptimizationRisk.LOW),
+            OptimizableApp("App Recommendation", "com.vivo.appstore.statistics",
+                "Фоновый сервис рекомендаций приложений", OptimizationRisk.LOW),
+            OptimizableApp("EasyShare", "com.vivo.easyshare",
+                "Обмен файлами между устройствами vivo", OptimizationRisk.LOW),
+            OptimizableApp("vivoCloud", "com.vivo.cloud",
+                "Облачное хранилище vivo", OptimizationRisk.LOW),
+            OptimizableApp("AI Engine", "com.vivo.aiengine",
+                "AI-функции прошивки OriginOS/FuntouchOS — частично затрагивает умные функции камеры", OptimizationRisk.MEDIUM),
+            OptimizableApp("Browser Service", "com.vivo.browser.provider",
+                "Фоновый сервис браузера vivo", OptimizationRisk.LOW),
+        ),
+    ),
+
+    ManufacturerProfile(
+        name = "realme / OPPO",
+        emoji = "🔶",
+        apps = listOf(
+            OptimizableApp("HeyTap Cloud", "com.heytap.cloud",
+                "Облачный сервис OPPO/realme", OptimizationRisk.LOW),
+            OptimizableApp("HeyTap Browser", "com.heytap.browser",
+                "Встроенный браузер ColorOS", OptimizationRisk.LOW),
+            OptimizableApp("Game Space", "com.oppo.gamespace",
+                "Игровой режим OPPO/realme — режим производительности", OptimizationRisk.MEDIUM),
+            OptimizableApp("App Market (HeyTap)", "com.heytap.market",
+                "Магазин приложений HeyTap/OPPO", OptimizationRisk.LOW),
+            OptimizableApp("Theme Store", "com.coloros.themestore",
+                "Магазин тем оформления ColorOS", OptimizationRisk.LOW),
+            OptimizableApp("Smart Assistant (Breeno)", "com.oplus.assistant",
+                "AI-ассистент Breeno от OPPO", OptimizationRisk.MEDIUM),
+            OptimizableApp("HeyTap Analytics", "com.heytap.openid",
+                "Аналитика и идентификатор пользователя в экосистеме HeyTap", OptimizationRisk.LOW),
+            OptimizableApp("Smart Suggestions", "com.coloros.smartsidebar",
+                "Умная боковая панель с рекомендациями", OptimizationRisk.LOW),
+            OptimizableApp("ORoaming", "com.coloros.oroaming",
+                "Сервис роуминга OPPO", OptimizationRisk.LOW),
+            OptimizableApp("Video Center", "com.heytap.mcs",
+                "Видеосервис HeyTap", OptimizationRisk.LOW),
+            OptimizableApp("Music Center", "com.coloros.music",
+                "Музыкальный сервис ColorOS", OptimizationRisk.LOW),
+            OptimizableApp("Clone Phone", "com.coloros.clonephone",
+                "Перенос данных с другого телефона", OptimizationRisk.LOW),
+        ),
+    ),
+)
