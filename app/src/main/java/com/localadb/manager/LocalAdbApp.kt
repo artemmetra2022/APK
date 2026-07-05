@@ -3,6 +3,7 @@ package com.localadb.manager
 import android.app.Application
 import org.conscrypt.Conscrypt
 import java.security.Security
+import timber.log.Timber
 
 /**
  * Устанавливает библиотечную (не системную/урезанную) реализацию Conscrypt как провайдер TLS
@@ -14,5 +15,7 @@ class LocalAdbApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Security.insertProviderAt(Conscrypt.newProvider(), 1)
+        // Инициализация Timber для логирования. В релизе следует заменить/ограничить дерево.
+        Timber.plant(Timber.DebugTree())
     }
 }
