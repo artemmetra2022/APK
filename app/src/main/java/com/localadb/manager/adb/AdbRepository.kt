@@ -8,7 +8,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.delay
+import timber.log.Timber
 import java.io.File
+import java.io.IOException
 
 /** Состояние подключения к ADB, которое отображает экран. */
 sealed interface AdbConnectionState {
@@ -47,12 +50,41 @@ class AdbRepository(context: Context) {
     /** Есть ли сохранённая пара ключей — то есть раньше уже было сопряжение. */
     fun hasSavedPairing(): Boolean = keyStore.hasKeys()
 
+    private suspend fun <T> retryWithBackoff(
+        attempts: Int = 3,
+        initialDelayMs: Long = 500,
+        factor: Double = 2.0,
+        block: suspend () -> T,
+    ): T {
+        var currentDelay = initialDelayMs
+        var lastError: Throwable? = null
+        repeat(attempts - 1) {
+            try {
+                return block()
+            } catch (e: Throwable) {
+                lastError = e
+                Timber.w(e, "Transient failure, will retry after %d ms", currentDelay)
+                delay(currentDelay)
+                currentDelay = (currentDelay * factor).toLong()
+            }
+        }
+        // last attempt
+        return try {
+            block()
+        } catch (e: Throwable) {
+            Timber.e(e, "Final attempt failed")
+            throw e
+        }
+    }
+
     /** Пробует переподключиться сохранёнными ключами без повторного ввода кода. */
     suspend fun reconnect(): Boolean = withContext(Dispatchers.IO) {
         _state.value = AdbConnectionState.Connecting
         try {
-            // connectTls сам находит сервис _adb-tls-connect._tcp через mDNS и подключается к нему
-            manager().connectTls(appContext, 10_000)
+            retryWithBackoff(attempts = 3, initialDelayMs = 500) {
+                // connectTls сам находит сервис _adb-tls-connect._tcp через mDNS и подключается к нему
+                manager().connectTls(appContext, 10_000)
+            }
             _state.value = AdbConnectionState.Connected
             true
         } catch (e: Exception) {
@@ -60,6 +92,7 @@ class AdbRepository(context: Context) {
                 "Не удалось подключиться. Проверьте, что на телефоне включена «Отладка по Wi-Fi». " +
                     "(${describeError(e)})"
             )
+            Timber.w(e, "reconnect failed")
             false
         }
     }
@@ -73,7 +106,10 @@ class AdbRepository(context: Context) {
         try {
             val service = withTimeout(30_000) { pairingDiscovery.discover().first() }
             _state.value = AdbConnectionState.Pairing
-            manager().pair(service.host, service.port, pairingCode)
+            // попытка сопряжения с базовой retry-логикой
+            retryWithBackoff(attempts = 3, initialDelayMs = 500) {
+                manager().pair(service.host, service.port, pairingCode)
+            }
             reconnect()
         } catch (e: TimeoutCancellationException) {
             _state.value = AdbConnectionState.Error(
@@ -86,6 +122,7 @@ class AdbRepository(context: Context) {
                 "Не удалось сопрячься. Проверьте код и повторите — экран с кодом в настройках " +
                     "нужно открыть заново, код одноразовый. (${describeError(e)})"
             )
+            Timber.w(e, "pairAndConnect failed")
             false
         }
     }
@@ -103,70 +140,62 @@ class AdbRepository(context: Context) {
 
             // 1. push файла через ADB sync
             val pushStream = manager().openStream("sync:")
-            pushStream.openOutputStream().use { out ->
-                val remotePathWithMode = "$remotePath,0644"
-                val pathBytes = remotePathWithMode.toByteArray()
-                out.write("SEND".toByteArray())
-                out.write(pathBytes.size.toLittleEndian())
-                out.write(pathBytes)
+            try {
+                pushStream.openOutputStream().use { out ->
+                    val remotePathWithMode = "$remotePath,0644"
+                    val pathBytes = remotePathWithMode.toByteArray()
+                    out.write("SEND".toByteArray())
+                    out.write(pathBytes.size.toLittleEndian())
+                    out.write(pathBytes)
 
-                val buf = ByteArray(65536)
-                apkFile.inputStream().use { input ->
-                    var read: Int
-                    while (input.read(buf).also { read = it } != -1) {
-                        out.write("DATA".toByteArray())
-                        out.write(read.toLittleEndian())
-                        out.write(buf, 0, read)
+                    val buf = ByteArray(65536)
+                    apkFile.inputStream().use { input ->
+                        var read: Int
+                        while (input.read(buf).also { read = it } != -1) {
+                            out.write("DATA".toByteArray())
+                            out.write(read.toLittleEndian())
+                            out.write(buf, 0, read)
+                        }
                     }
-                }
 
-                val mtime = (apkFile.lastModified() / 1000).toInt()
-                out.write("DONE".toByteArray())
-                out.write(mtime.toLittleEndian())
-                out.flush()
+                    val mtime = (apkFile.lastModified() / 1000).toInt()
+                    out.write("DONE".toByteArray())
+                    out.write(mtime.toLittleEndian())
+                    out.flush()
+                }
+            } finally {
+                runCatching { pushStream.close() }
             }
-            runCatching { pushStream.close() }
 
             // 2. Первая попытка установки
-            var installResult = runShell("pm install -r $remotePath").getOrThrow()
+            var installResult = retryWithBackoff { runShell("pm install -r $remotePath").getOrThrow() }
 
             // 3. Если Android отклонил из-за устаревшего targetSdk — повторяем с флагом обхода
             if (installResult.contains("INSTALL_FAILED_DEPRECATED_SDK_VERSION", ignoreCase = true)) {
-                installResult = runShell(
-                    "pm install -r --bypass-low-target-sdk-block $remotePath"
-                ).getOrThrow()
+                installResult = retryWithBackoff {
+                    runShell("pm install -r --bypass-low-target-sdk-block $remotePath").getOrThrow()
+                }
             }
 
-            // 4. Удаляем временный файл
-            runShell("rm -f $remotePath")
+            // 4. Удаляем временный файл (пытаться как можно лучше — не фатально)
+            runCatching { runShell("rm -f $remotePath") }
 
             installResult
         }
     }
 
-    /**
-     * Отключает пакет для текущего пользователя без root.
-     * Команда `pm uninstall -k --user 0` убирает приложение из профиля пользователя,
-     * но сохраняет APK на системном разделе — его можно вернуть командой [enablePackage].
-     */
+    /** Отключает пакет для текущего пользователя без root. */
     suspend fun disablePackage(packageName: String): Result<String> = withContext(Dispatchers.IO) {
         runShell("pm uninstall -k --user 0 $packageName")
     }
 
-    /**
-     * Возвращает ранее отключённый системный пакет для текущего пользователя.
-     */
+    /** Возвращает ранее отключённый системный пакет для текущего пользователя. */
     suspend fun enablePackage(packageName: String): Result<String> = withContext(Dispatchers.IO) {
         runShell("pm install-existing --user 0 $packageName")
     }
 
-    /**
-     * Возвращает множество пакетов, которые отключены для текущего пользователя
-     * (`pm uninstall --user 0` без `-k` или `pm disable-user`).
-     */
+    /** Возвращает множество пакетов, которые отключены для текущего пользователя */
     suspend fun getDisabledPackages(): Result<Set<String>> = withContext(Dispatchers.IO) {
-        // pm list packages -u показывает все пакеты включая удалённые для пользователя,
-        // а pm list packages без флагов — только активные. Разница = отключённые.
         runCatching {
             val disabled = runShell("pm list packages -u").getOrThrow()
                 .lineSequence()
@@ -208,14 +237,9 @@ class AdbRepository(context: Context) {
         }
     }
 
-    /**
-     * Подробный список сторонних приложений: имя пакета, версия, размер APK, дата установки.
-     * Делает 3 обращения к устройству независимо от количества приложений (+1 на пакет для версии),
-     * а не одно гигантское — так проще парсить надёжно, без сложных shell-скриптов в одну строку.
-     */
+    /** Подробный список сторонних приложений */
     suspend fun listInstalledAppsDetailed(): Result<List<InstalledApp>> = withContext(Dispatchers.IO) {
         runCatching {
-            // 1. Пакеты + пути к их APK
             val listOutput = runShell("pm list packages -3 -f").getOrThrow()
             val pkgToPath = LinkedHashMap<String, String>()
             listOutput.lineSequence().forEach { rawLine ->
@@ -228,7 +252,6 @@ class AdbRepository(context: Context) {
                 }
             }
 
-            // 2. Размеры всех APK одной командой (stat поддерживает несколько путей сразу)
             val sizeByPath = mutableMapOf<String, Long>()
             if (pkgToPath.isNotEmpty()) {
                 val pathsArg = pkgToPath.values.joinToString(" ") { "\"$it\"" }
@@ -241,7 +264,6 @@ class AdbRepository(context: Context) {
                 }
             }
 
-            // 3. Версия и дата установки — отдельным запросом на пакет (надёжнее, чем один общий парсинг)
             pkgToPath.keys.sorted().map { pkg ->
                 val info = runShell("dumpsys package $pkg | grep -E 'versionName=|firstInstallTime='")
                     .getOrNull().orEmpty()
@@ -263,30 +285,48 @@ class AdbRepository(context: Context) {
         runShell(command)
     }
 
-    private fun runShell(command: String): Result<String> {
+    private fun isTransientException(e: Throwable): Boolean {
+        // На практике библиотека может бросать разные типы исключений при обрыве соединения.
+        // Считаем transient те, которые выглядят как I/O/Network hiccup.
+        return e is IOException || e is IllegalStateException
+    }
+
+    private fun tryReconnectAndRun(command: String): Result<String> {
         return try {
-            val stream = manager().openStream("shell:$command")
-            val output = stream.openInputStream().bufferedReader().readText()
-            runCatching { stream.close() }
-            Result.success(output)
+            manager().connectTls(appContext, 10_000)
+            val stream2 = manager().openStream("shell:$command")
+            stream2.openInputStream().bufferedReader().use { it.readText() }.let {
+                runCatching { stream2.close() }
+                Result.success(it)
+            }
         } catch (e: Exception) {
-            val msg = e.message.orEmpty()
-            // "Stream closed" / "Broken pipe" — соединение разорвалось.
-            // Пробуем переподключиться один раз и повторить команду.
-            if (msg.contains("Stream closed", ignoreCase = true) ||
-                msg.contains("Broken pipe", ignoreCase = true) ||
-                msg.contains("closed", ignoreCase = true)
-            ) {
-                return try {
-                    manager().connectTls(appContext, 10_000)
-                    val stream2 = manager().openStream("shell:$command")
-                    val output2 = stream2.openInputStream().bufferedReader().readText()
-                    runCatching { stream2.close() }
-                    Result.success(output2)
-                } catch (e2: Exception) {
-                    Result.failure(e2)
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun runShell(command: String): Result<String> {
+        return try {
+            retryWithBackoff(attempts = 3) {
+                try {
+                    val stream = manager().openStream("shell:$command")
+                    // Используем .use, если объект Stream реализует Closeable — ранее вызывался .close()
+                    stream.openInputStream().bufferedReader().use { reader ->
+                        reader.readText()
+                    }.also {
+                        runCatching { stream.close() }
+                    }.let { Result.success(it) }
+                } catch (e: Exception) {
+                    Timber.w(e, "runShell failed for command: %s", command)
+                    if (isTransientException(e)) {
+                        // Попробуем переподключиться и повторить один раз
+                        tryReconnectAndRun(command)
+                    } else {
+                        Result.failure(e)
+                    }
                 }
             }
+        } catch (e: Exception) {
+            Timber.e(e, "runShell final failure: %s", command)
             Result.failure(e)
         }
     }
