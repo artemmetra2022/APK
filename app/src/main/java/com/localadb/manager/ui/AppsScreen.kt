@@ -1,5 +1,6 @@
 package com.localadb.manager.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,9 +29,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.localadb.manager.adb.InstalledApp
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.core.graphics.drawable.toBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun AppsScreen(viewModel: MainViewModel) {
@@ -108,6 +118,43 @@ private fun AppRow(app: InstalledApp, onDeleteClick: () -> Unit) {
             modifier = Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Attempt to load app icon from PackageManager. If not available, show placeholder
+            val context = LocalContext.current
+            var iconBitmap: ImageBitmap? by remember { mutableStateOf(null as ImageBitmap?) }
+
+            LaunchedEffect(app.packageName) {
+                // Loading the drawable can be slow on main thread for many apps; keep it simple here.
+                withContext(Dispatchers.IO) {
+                    try {
+                        val drawable = context.packageManager.getApplicationIcon(app.packageName)
+                        val bmp = drawable.toBitmap()
+                        iconBitmap = bmp.asImageBitmap()
+                    } catch (e: Exception) {
+                        // ignore, keep null
+                    }
+                }
+            }
+
+            if (iconBitmap != null) {
+                Image(
+                    bitmap = iconBitmap!!,
+                    contentDescription = "icon",
+                    modifier = Modifier
+                        .width(48.dp)
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+                Spacer(Modifier.width(12.dp))
+            } else {
+                // small placeholder box
+                Box(modifier = Modifier
+                    .width(48.dp)
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(8.dp)))
+                Spacer(Modifier.width(12.dp))
+            }
+
             Column(Modifier.weight(1f)) {
                 Text(app.packageName, fontWeight = FontWeight.Bold)
                 Text("Версия: ${app.versionName}", style = MaterialTheme.typography.bodySmall)
